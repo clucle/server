@@ -32,6 +32,7 @@ Created 1/8/1996 Heikki Tuuri
 #include "dict0mem.h"
 #include "fsp0fsp.h"
 #include <deque>
+#include "mdl.h"
 
 extern bool innodb_table_stats_not_found;
 extern bool innodb_index_stats_not_found;
@@ -118,15 +119,29 @@ enum dict_table_op_t {
 	DICT_TABLE_OP_OPEN_ONLY_IF_CACHED
 };
 
-/**********************************************************************//**
-Returns a table object based on table id.
+/** Parse the table file name into table name and database name.
+@param[in]	tbl_name        InnoDB table name
+@param[in,out]	mysql_db_name   database name buffer
+@param[in,out]	mysql_tbl_name  table name buffer
+@param[in,out]	is_temp		true if it is a temporary table
+				which starts with #sql
+@return true if the table name is parse properly. */
+bool dict_parse_tbl_name(
+	const char*	tbl_name,
+	char		(&mysql_db_name)[NAME_LEN + 1],
+	char		(&mysql_tbl_name)[NAME_LEN + 1]);
+
+/** Returns a table object based on table id and it does MDL for
+the table depends on the MDL_ticket parameter.
+@param[in]	table_id
 @return table, NULL if does not exist */
 dict_table_t*
 dict_table_open_on_id(
-/*==================*/
-	table_id_t	table_id,	/*!< in: table id */
-	ibool		dict_locked,	/*!< in: TRUE=data dictionary locked */
-	dict_table_op_t	table_op)	/*!< in: operation to perform */
+	table_id_t	table_id,
+	bool		dict_locked,
+	dict_table_op_t	table_op,
+	THD*		thd = NULL,
+	MDL_ticket**	mdl = NULL)
 	MY_ATTRIBUTE((warn_unused_result));
 
 /**********************************************************************//**
@@ -134,17 +149,23 @@ Returns a table object based on table id.
 @return	table, NULL if does not exist */
 dict_table_t* dict_table_open_on_index_id(index_id_t index_id)
 	__attribute__((warn_unused_result));
-/********************************************************************//**
-Decrements the count of open handles to a table. */
+
+/** Decrements the count of open handles of a table.
+@param[in,out]	table		table
+@param[in]	dict_locked	data dictionary locked
+@param[in]	try_drop	try to drop any orphan indexes after
+				an aborted online index creation
+@param[in]	thd		thread to release MDL
+@param[in]	mdl		metadata lock or NULL if the thread is a
+				foreground one. */
 void
 dict_table_close(
-/*=============*/
-	dict_table_t*	table,		/*!< in/out: table */
-	ibool		dict_locked,	/*!< in: TRUE=data dictionary locked */
-	ibool		try_drop)	/*!< in: TRUE=try to drop any orphan
-					indexes after an aborted online
-					index creation */
-	MY_ATTRIBUTE((nonnull));
+	dict_table_t*	table,
+	bool		dict_locked,
+	bool		try_drop,
+	THD*		thd = NULL,
+	MDL_ticket*	mdl = NULL);
+
 /*********************************************************************//**
 Closes the only open handle to a table and drops a table while assuring
 that dict_sys.mutex is held the whole time.  This assures that the table

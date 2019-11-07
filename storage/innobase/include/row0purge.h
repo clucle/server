@@ -34,6 +34,7 @@ Created 3/14/1997 Heikki Tuuri
 #include "row0types.h"
 #include "ut0vec.h"
 #include "row0mysql.h"
+#include "mysqld.h"
 
 /** Determines if it is possible to remove a secondary index entry.
 Removal is possible if the secondary index entry does not refer to any
@@ -127,20 +128,31 @@ public:
 #endif
 	trx_id_t	trx_id;	/*!< trx id for this purging record */
 
-	/** Virtual column information about opening of MariaDB table.
-	It resets after processing each undo log record. */
-	purge_vcol_info_t	vcol_info;
+	/** meta-data lock for the table name */
+	MDL_ticket*		mdl_ticket;
+
+	/** table id of the previous undo log record */
+	table_id_t		last_table_id;
+
+	/** purge thread */
+	THD*			purge_thd;
+
+	/** metadata lock holds for this number of undo log recs */
+	int			mdl_hold_recs;
 
 	/** Constructor */
 	explicit purge_node_t(que_thr_t* parent) :
 		common(QUE_NODE_PURGE, parent),
 		undo_recs(NULL),
 		unavailable_table_id(0),
-		heap(mem_heap_create(256)),
+		heap(mem_heap_create(256))
 #ifdef UNIV_DEBUG
-		in_progress(false),
+		,in_progress(false),
 #endif
-		vcol_info()
+		mdl_ticket(NULL),
+		last_table_id(0),
+		purge_thd(NULL),
+		mdl_hold_recs(0)
 	{}
 
 #ifdef UNIV_DEBUG
@@ -153,11 +165,6 @@ public:
 	the ref member.*/
 	bool validate_pcur();
 #endif
-
-	/** Whether purge failed to open the maria table for virtual column
-	computation.
-	@return true if the table failed to open. */
-	bool vcol_op_failed() const { return !vcol_info.validate(); }
 
 	/** Determine if a table should be skipped in purge.
 	@param[in]	table_id	table identifier
@@ -183,7 +190,6 @@ public:
 		ut_ad(in_progress);
 		DBUG_ASSERT(common.type == QUE_NODE_PURGE);
 
-		table = NULL;
 		row = NULL;
 		ref = NULL;
 		index = NULL;
@@ -191,6 +197,47 @@ public:
 		found_clust = FALSE;
 		rec_type = ULINT_UNDEFINED;
 		cmpl_info = ULINT_UNDEFINED;
+		if (!purge_thd) {
+			purge_thd = current_thd;
+		}
+	}
+
+	/** Close the existing table and release the MDL for it. */
+	void close_table()
+	{
+		if (table == NULL) {
+			mdl_ticket = NULL;
+			last_table_id = 0;
+			return;
+		}
+
+		innobase_reset_background_thd(purge_thd);
+		dict_table_close(
+			table, false, false, purge_thd, mdl_ticket);
+		last_table_id = 0;
+		table = NULL;
+		mdl_ticket = NULL;
+	}
+
+	/** Retail mdl for the table id.
+	@param[in]	table_id	table id to be processed
+	@return true if retain mdl */
+	bool retain_mdl(table_id_t table_id)
+	{
+		if (last_table_id == 0) {
+			mdl_hold_recs = 0;
+			return false;
+		}
+
+		if (last_table_id == table_id && mdl_hold_recs < 100) {
+			ut_ad(table != NULL);
+			mdl_hold_recs++;
+			return true;
+		}
+
+		mdl_hold_recs = 0;
+		close_table();
+		return false;
 	}
 
 	/** Reset the state at end
@@ -198,9 +245,11 @@ public:
 	que_node_t* end()
 	{
 		DBUG_ASSERT(common.type == QUE_NODE_PURGE);
+
+		close_table();
 		undo_recs = NULL;
 		ut_d(in_progress = false);
-		vcol_info.reset();
+		purge_thd = NULL;
 		mem_heap_empty(heap);
 		return common.parent;
 	}

@@ -1106,4 +1106,27 @@ void mdl_dbug_print_locks();
 #else
   static inline void mdl_dbug_print_locks() {}
 #endif /* DBUG_OFF */
+
+/**
+  Acquire shared metadata lock on the given table name with
+  explicit duration.
+
+  @param thd		thread to which mdl lock belongs to
+  @param db_name	database name
+  @param tbl_name	table name
+  @param out_mdl_ticket	pointer to MDL_ticket upon successful lock
+			attempt
+*/
+bool acquire_shared_table_mdl(THD *thd, const char *db_name,
+			      const char *tbl_name,
+			      MDL_ticket **out_mdl_ticket);
+
+/**
+  Release MDL_EXPLICIT lock held by a ticket
+
+  @param thd		thread to which lock belongs to
+  @param mdl_ticket	lock ticket
+*/
+void release_mdl(THD *thd, MDL_ticket *mdl_ticket);
+
 #endif /* MDL_H */
