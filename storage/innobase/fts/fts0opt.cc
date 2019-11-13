@@ -45,6 +45,7 @@ static tpool::timer* timer;
 static tpool::task_group task_group(1);
 static tpool::task task(fts_optimize_callback,0, &task_group);
 
+THD* fts_opt_thd;
 
 /** The FTS vector to store fts_slot_t */
 static ib_vector_t*  fts_slots;
@@ -2832,8 +2833,6 @@ static void fts_optimize_callback(void *)
 		return;
 	}
 
-	THD*	fts_opt_thread = current_thd;
-
 	while (!done && srv_shutdown_state == SRV_SHUTDOWN_NONE) {
 
 		/* If there is no message in the queue and we have tables
@@ -2906,7 +2905,7 @@ static void fts_optimize_callback(void *)
 
 				fts_optimize_sync_table(
 					static_cast<dict_table_t*>(msg->ptr),
-					fts_opt_thread);
+					fts_opt_thd);
 				break;
 
 			default:
@@ -2927,7 +2926,7 @@ static void fts_optimize_callback(void *)
 
 			if (slot->table) {
 				fts_optimize_sync_table(
-					slot->table, fts_opt_thread);
+					slot->table, fts_opt_thd);
 			}
 		}
 	}
@@ -2935,6 +2934,7 @@ static void fts_optimize_callback(void *)
 	ib_vector_free(fts_slots);
 	fts_slots = NULL;
 
+	innobase_destroy_background_thd(fts_opt_thd);
 	ib::info() << "FTS optimize thread exiting.";
 
 	os_event_set(fts_opt_shutdown_event);
@@ -2964,6 +2964,8 @@ fts_optimize_init(void)
 	heap_alloc = ib_heap_allocator_create(heap);
 	fts_slots = ib_vector_create(heap_alloc, sizeof(fts_slot_t), 4);
 
+	fts_opt_thd = innobase_create_background_thd(
+			"InnoDB fts optimize thread");
 	/* Add fts tables to fts_slots which could be skipped
 	during dict_load_table_one() because fts_optimize_thread
 	wasn't even started. */

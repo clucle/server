@@ -145,6 +145,7 @@ public:
 		common(QUE_NODE_PURGE, parent),
 		undo_recs(NULL),
 		unavailable_table_id(0),
+		table(NULL),
 		heap(mem_heap_create(256))
 #ifdef UNIV_DEBUG
 		,in_progress(false),
