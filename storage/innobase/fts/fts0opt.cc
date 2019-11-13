@@ -2832,6 +2832,8 @@ static void fts_optimize_callback(void *)
 		return;
 	}
 
+	THD*	fts_opt_thread = current_thd;
+
 	while (!done && srv_shutdown_state == SRV_SHUTDOWN_NONE) {
 
 		/* If there is no message in the queue and we have tables
