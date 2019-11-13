@@ -109,15 +109,13 @@ row_purge_remove_clust_if_poss_low(
 
 	mtr_t mtr;
 	mtr.start();
+	index->set_modified(mtr);
 
 	if (!row_purge_reposition_pcur(mode, node, &mtr)) {
 		/* The record was already removed. */
 		mtr.commit();
 		return true;
 	}
-
-	ut_d(const bool was_instant = !!index->table->instant);
-	index->set_modified(mtr);
 
 	rec_t* rec = btr_pcur_get_rec(&node->pcur);
 	ulint offsets_[REC_OFFS_NORMAL_SIZE];
@@ -157,10 +155,6 @@ row_purge_remove_clust_if_poss_low(
 			ut_error;
 		}
 	}
-
-	/* Prove that dict_index_t::clear_instant_alter() was
-	not called with index->table->instant != NULL. */
-	ut_ad(!was_instant || index->table->instant);
 
 func_exit:
 	if (heap) {
