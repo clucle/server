@@ -10769,44 +10769,6 @@ ha_innobase::commit_inplace_alter_table(
 		DICT_BG_YIELD(trx);
 	}
 
-	/* Make a concurrent Drop fts Index to wait until sync of that
-	fts index is happening in the background */
-	for (int retry_count = 0;;) {
-		bool    retry = false;
-
-		for (inplace_alter_handler_ctx** pctx = ctx_array;
-		    *pctx; pctx++) {
-			ha_innobase_inplace_ctx*        ctx
-				= static_cast<ha_innobase_inplace_ctx*>(*pctx);
-			DBUG_ASSERT(new_clustered == ctx->need_rebuild());
-
-			if (dict_fts_index_syncing(ctx->old_table)) {
-				retry = true;
-				break;
-			}
-
-			if (new_clustered && dict_fts_index_syncing(ctx->new_table)) {
-				retry = true;
-				break;
-			}
-		}
-
-		if (!retry) {
-			 break;
-		}
-
-		/* Print a message if waiting for a long time. */
-		if (retry_count < 100) {
-			retry_count++;
-		} else {
-			ib::info() << "Drop index waiting for background sync"
-				" to finish";
-			retry_count = 0;
-		}
-
-		DICT_BG_YIELD(trx);
-	}
-
 	/* Apply the changes to the data dictionary tables, for all
 	partitions. */
 

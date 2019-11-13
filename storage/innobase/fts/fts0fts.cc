@@ -846,19 +846,9 @@ fts_drop_index(
 
 			err = fts_drop_index_tables(trx, index);
 
-			while (index->index_fts_syncing
-				&& !trx_is_interrupted(trx)) {
-				DICT_BG_YIELD(trx);
-			}
-
 			fts_free(table);
 
 			return(err);
-		}
-
-		while (index->index_fts_syncing
-		       && !trx_is_interrupted(trx)) {
-			DICT_BG_YIELD(trx);
 		}
 
 		current_doc_id = table->fts->cache->next_doc_id;
@@ -877,10 +867,6 @@ fts_drop_index(
 		index_cache = fts_find_index_cache(cache, index);
 
 		if (index_cache != NULL) {
-			while (index->index_fts_syncing
-			       && !trx_is_interrupted(trx)) {
-				DICT_BG_YIELD(trx);
-			}
 			if (index_cache->words) {
 				fts_words_free(index_cache->words);
 				rbt_free(index_cache->words);
@@ -4318,8 +4304,6 @@ begin_sync:
 
 		DBUG_EXECUTE_IF("fts_instrument_sync_before_syncing",
 				os_thread_sleep(300000););
-		index_cache->index->index_fts_syncing = true;
-
 		error = fts_sync_index(sync, index_cache);
 
 		if (error != DB_SUCCESS) {
@@ -4357,13 +4341,6 @@ end_sync:
 	}
 
 	rw_lock_x_lock(&cache->lock);
-	/* Clear fts syncing flags of any indexes in case sync is
-	interrupted */
-	for (i = 0; i < ib_vector_size(cache->indexes); ++i) {
-		static_cast<fts_index_cache_t*>(
-			ib_vector_get(cache->indexes, i))
-			->index->index_fts_syncing = false;
-	}
 
 	sync->interrupted = false;
 	sync->in_progress = false;
