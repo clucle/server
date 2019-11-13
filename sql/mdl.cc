@@ -3210,6 +3210,24 @@ bool MDL_context::has_explicit_locks()
   return false;
 }
 
+bool acquire_shared_table_mdl_no_wait(THD *thd, const char *db_name,
+				      const char *tbl_name,
+				      MDL_ticket **out_mdl_ticket)
+{
+  MDL_request	mdl_request;
+
+  mdl_request.init(MDL_key::TABLE, db_name, tbl_name,
+		   MDL_SHARED, MDL_EXPLICIT);
+
+  if (thd->mdl_context.try_acquire_lock(&mdl_request)
+      || !mdl_request.ticket)
+     return true;
+
+  if (out_mdl_ticket) *out_mdl_ticket = mdl_request.ticket;
+
+  return false;
+}
+
 bool acquire_shared_table_mdl(THD *thd, const char *db_name,
 			      const char *tbl_name,
 			      MDL_ticket **out_mdl_ticket)

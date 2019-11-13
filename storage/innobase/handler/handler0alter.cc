@@ -8468,6 +8468,30 @@ innobase_rollback_sec_index(
 	}
 }
 
+/* Get the number of uncommitted fts index during rollback
+operation.
+@param[in]	table	table which undergoes rollback for alter
+@return number of uncommitted fts indexes. */
+static
+ulint innobase_get_uncommitted_fts_indexes(
+	const dict_table_t* table) {
+
+	ut_ad(mutex_own(&dict_sys.mutex));
+	dict_index_t*	index = dict_table_get_first_index(table);
+	ulint		n_uncommitted_fts = 0;
+
+	for (; index ; index = dict_table_get_next_index(index)) {
+		if (index->type & DICT_FTS
+		    && !index->is_committed()
+		    && dict_index_get_online_status(index)
+		       == ONLINE_INDEX_COMPLETE) {
+			n_uncommitted_fts++;
+		}
+	}
+
+	return n_uncommitted_fts;
+}
+
 /** Roll back the changes made during prepare_inplace_alter_table()
 and inplace_alter_table() inside the storage engine. Note that the
 allowed level of concurrency during this operation will be the same as
@@ -8549,6 +8573,19 @@ rollback_inplace_alter_table(
 		DBUG_ASSERT(!(ha_alter_info->handler_flags
 			      & ALTER_ADD_PK_INDEX));
 		DBUG_ASSERT(ctx->new_table == prebuilt->table);
+
+		/* Remove the fts table from fts_optimize_wq if
+		there is only one fts index exist. */
+		if (prebuilt->table->fts
+		    && innobase_get_uncommitted_fts_indexes(
+					prebuilt->table) == 1
+		    && (ib_vector_is_empty(prebuilt->table->fts->indexes)
+			|| ib_vector_size(prebuilt->table->fts->indexes)
+			   == 1)) {
+			row_mysql_unlock_data_dictionary(ctx->trx);
+			fts_optimize_remove_table(prebuilt->table);
+			row_mysql_lock_data_dictionary(ctx->trx);
+		}
 
 		innobase_rollback_sec_index(
 			prebuilt->table, table, FALSE, ctx->trx);

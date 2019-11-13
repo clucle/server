@@ -254,8 +254,6 @@ is_partition(
 	return strstr(file_name, table_name_t::part_suffix);
 }
 
-
-
 /** Return the InnoDB ROW_FORMAT enum value
 @param[in]	row_format	row_format from "innodb_default_row_format"
 @return InnoDB ROW_FORMAT value from rec_format_t enum. */

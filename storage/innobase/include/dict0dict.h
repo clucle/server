@@ -131,6 +131,16 @@ bool dict_parse_tbl_name(
 	char		(&mysql_db_name)[NAME_LEN + 1],
 	char		(&mysql_tbl_name)[NAME_LEN + 1]);
 
+/** Acquire MDL shared for the table name without waiting.
+@param[in]	table		table object
+@param[in]	thd		background thread
+@param[in]	mdl		mdl ticket
+@return table object after locking mdl shared. */
+dict_table_t* dict_acquire_mdl_shared_no_wait(
+	dict_table_t*	table,
+	THD*		thd,
+	MDL_ticket**	mdl);
+
 /** Returns a table object based on table id and it does MDL for
 the table depends on the MDL_ticket parameter.
 @param[in]	table_id

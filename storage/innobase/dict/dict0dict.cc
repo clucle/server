@@ -776,6 +776,67 @@ bool dict_parse_tbl_name(
 	return true;
 }
 
+/** Acquire MDL shared for the table name without waiting.
+@param[in]	table		table object
+@param[in]	thd		background thread
+@param[in]	mdl		mdl ticket
+@return table object after locking mdl shared. */
+dict_table_t* dict_acquire_mdl_shared_no_wait(
+	dict_table_t*	table,
+	THD*		thd,
+	MDL_ticket**	mdl)
+{
+	ulint		db_len = dict_get_db_name_len(table->name.m_name);
+
+	if (db_len == 0) {
+		/* innodb system table */
+		return table;
+	}
+
+	table_id_t	table_id = table->id;
+	char		db_buf[NAME_LEN + 1], db_buf1[NAME_LEN + 1];
+	char		tbl_buf[NAME_LEN + 1], tbl_buf1[NAME_LEN + 1];
+
+	if (!dict_parse_tbl_name(table->name.m_name, db_buf, tbl_buf)) {
+		/* Intermediate table starts with #sql */
+		return table;
+	}
+
+retry_mdl:
+	if (acquire_shared_table_mdl_no_wait(thd, db_buf, tbl_buf, mdl)) {
+		return NULL;
+	}
+
+	table = dict_table_open_on_id(table_id, false, DICT_TABLE_OP_NORMAL);
+
+	if (!table) {
+		/* Table is dropped */
+		release_mdl(thd, *mdl);
+		return NULL;
+	}
+
+	if (!fil_table_accessible(table)) {
+		release_mdl(thd, *mdl);
+		return NULL;
+	}
+
+	dict_parse_tbl_name(table->name.m_name, db_buf1, tbl_buf1);
+
+	if (strcmp(db_buf, db_buf1) == 0
+	    && strcmp(tbl_buf, tbl_buf1) == 0) {
+		return table;
+	}
+
+	/* Table is renamed. so release mdl lock for old name and
+	try to acquire the MDL for the new table name. */
+	release_mdl(thd, *mdl);
+
+	strcpy(tbl_buf, tbl_buf1);
+	strcpy(db_buf, db_buf1);
+	table->release();
+	goto retry_mdl;
+}
+
 /** Acquire MDL shared for the table name.
 @param[in]	table		table object
 @param[in]	dict_locked	data dictionary locked

@@ -1109,6 +1109,19 @@ void mdl_dbug_print_locks();
 
 /**
   Acquire shared metadata lock on the given table name with
+  explicit duration but without waiting.
+
+  @param thd		thread to which mdl lock belongs to
+  @param db_name	database name
+  @param tbl_name	table name
+  @param out_mdl_ticket	pointer to MDL_ticket upon successful lock
+			attempt
+*/
+bool acquire_shared_table_mdl_no_wait(THD *thd, const char *db_name,
+				      const char *tbl_name,
+				      MDL_ticket **out_mdl_ticket);
+/**
+  Acquire shared metadata lock on the given table name with
   explicit duration.
 
   @param thd		thread to which mdl lock belongs to

@@ -2564,12 +2564,6 @@ void fts_optimize_add_table(dict_table_t* table)
 		return;
 	}
 
-	/* If there is no fts index present then don't add to
-	optimize queue. */
-	if (!ib_vector_size(table->fts->indexes)) {
-		return;
-	}
-
 	/* Make sure table with FTS index cannot be evicted */
 	dict_table_prevent_eviction(table);
 
@@ -2626,6 +2620,8 @@ fts_optimize_remove_table(
 	remove->table = table;
 	remove->event = event;
 	msg->ptr = remove;
+
+	ut_ad(!mutex_own(&dict_sys.mutex));
 
 	add_msg(msg, true);
 
@@ -2792,13 +2788,30 @@ static bool fts_is_sync_needed()
 
 /** Sync fts cache of a table
 @param[in,out]	table	table to be synced */
-static void fts_optimize_sync_table(dict_table_t* table)
+static void fts_optimize_sync_table(
+	dict_table_t*	table,
+	THD*		fts_opt_thread)
 {
-	if (table->fts && table->fts->cache && fil_table_accessible(table)) {
-		fts_sync_table(table, false);
+	MDL_ticket*	mdl_ticket = NULL;
+
+	dict_table_t*	sync_table = dict_acquire_mdl_shared_no_wait(
+			table, fts_opt_thread, &mdl_ticket);
+
+	if (!sync_table) {
+		return;
+	}
+
+	if (sync_table->fts && sync_table->fts->cache
+	   && fil_table_accessible(sync_table)) {
+		fts_sync_table(sync_table, false);
 	}
 
 	DBUG_EXECUTE_IF("ib_optimize_wq_hang", os_thread_sleep(6000000););
+
+	if (mdl_ticket) {
+		dict_table_close(sync_table, false, false,
+				 fts_opt_thread, mdl_ticket);
+	}
 }
 
 /**********************************************************************//**
@@ -2812,6 +2825,7 @@ static void fts_optimize_callback(void *)
 	static ulint		n_optimize = 0;
 
 	ut_ad(!srv_read_only_mode);
+	ut_ad(fts_slots);
 
 	if (!fts_optimize_wq) {
 		/* Possibly timer initiated callback, can come after FTS_MSG_STOP.*/
@@ -2889,7 +2903,8 @@ static void fts_optimize_callback(void *)
 					os_thread_sleep(300000););
 
 				fts_optimize_sync_table(
-					static_cast<dict_table_t*>(msg->ptr));
+					static_cast<dict_table_t*>(msg->ptr),
+					fts_opt_thread);
 				break;
 
 			default:
@@ -2909,7 +2924,8 @@ static void fts_optimize_callback(void *)
 				ib_vector_get(fts_slots, i));
 
 			if (slot->table) {
-				fts_optimize_sync_table(slot->table);
+				fts_optimize_sync_table(
+					slot->table, fts_opt_thread);
 			}
 		}
 	}
