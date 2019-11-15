@@ -326,7 +326,6 @@ public:
 	/** Whether the table holds dict_sys.mutex;
 	protected by bg_threads_mutex */
 	unsigned	dict_locked:1;
-
 	/** Number of background threads accessing this table. */
 	ulint		bg_threads;
 
@@ -348,6 +347,10 @@ public:
 	/** Whether the table exists in fts_optimize_wq;
 	protected by fts_optimize_wq mutex */
 	bool		in_queue;
+
+	/** Whether the sync message exists in fts_optimize_wq;
+	protected by fts_optimize_wq mutex */
+	bool		sync_message;
 
 	/** Heap for fts_t allocation. */
 	mem_heap_t*	fts_heap;
@@ -983,5 +986,9 @@ fts_add_doc_from_tuple(
 fts_trx_t*
 fts_trx_create(
 	trx_t*  trx);
+
+/** Sync the table during commit phase
+@param[in]	table	table to be synced */
+void fts_sync_during_ddl(dict_table_t* table);
 
 #endif /*!< fts0fts.h */

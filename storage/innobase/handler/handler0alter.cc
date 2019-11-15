@@ -10712,6 +10712,7 @@ ha_innobase::commit_inplace_alter_table(
 		if (ctx->new_table->fts) {
 			ut_ad(!ctx->new_table->fts->add_wq);
 			fts_optimize_remove_table(ctx->new_table);
+			fts_sync_during_ddl(ctx->new_table);
 		}
 
 		/* Apply the online log of the table before acquiring
