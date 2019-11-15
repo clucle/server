@@ -39,7 +39,7 @@ static int rr_quick(READ_RECORD *info);
 int rr_sequential(READ_RECORD *info);
 static int rr_from_tempfile(READ_RECORD *info);
 static int rr_unpack_from_tempfile(READ_RECORD *info);
-static int rr_unpack_from_buffer(READ_RECORD *info);
+template<bool> static int rr_unpack_from_buffer(READ_RECORD *info);
 int rr_from_pointers(READ_RECORD *info);
 static int rr_from_cache(READ_RECORD *info);
 static int init_rr_cache(THD *thd, READ_RECORD *info);
@@ -187,13 +187,17 @@ bool init_read_record(READ_RECORD *info,THD *thd, TABLE *table,
                       bool disable_rr_cache)
 {
   IO_CACHE *tempfile;
-  SORT_ADDON_FIELD *addon_field= filesort ? filesort->addon_field : 0;
+  SORT_ADDON_FIELD *addon_field= filesort ?
+                                 (filesort->addon_fields ?
+                                 filesort->addon_fields->begin() : NULL):
+                                 NULL;
   DBUG_ENTER("init_read_record");
 
   bzero((char*) info,sizeof(*info));
   info->thd=thd;
   info->table=table;
   info->addon_field= addon_field;
+  info->sort_info= filesort;
   
   if ((table->s->tmp_table == INTERNAL_TMP_TABLE) &&
       !addon_field)
@@ -203,7 +207,6 @@ bool init_read_record(READ_RECORD *info,THD *thd, TABLE *table,
   {
     info->rec_buf=    (uchar*) filesort->addon_buf.str;
     info->ref_length= (uint)filesort->addon_buf.length;
-    info->unpack=     filesort->unpack;
   }
   else
   {
@@ -264,16 +267,29 @@ bool init_read_record(READ_RECORD *info,THD *thd, TABLE *table,
     DBUG_PRINT("info",("using rr_quick"));
     info->read_record_func= rr_quick;
   }
-  else if (filesort && filesort->record_pointers)
+  else if (filesort && filesort->has_filesort_result_in_memory())
   {
     DBUG_PRINT("info",("using record_pointers"));
     if (unlikely(table->file->ha_rnd_init_with_error(0)))
       DBUG_RETURN(1);
+
     info->cache_pos= filesort->record_pointers;
-    info->cache_end= (info->cache_pos+ 
-                      filesort->return_rows * info->ref_length);
-    info->read_record_func=
-        addon_field ? rr_unpack_from_buffer : rr_from_pointers;
+    if (filesort->using_addon_fields())
+    {
+      DBUG_PRINT("info",("using rr_unpack_from_buffer"));
+      DBUG_ASSERT(filesort->sorted_result_in_fsbuf);
+      info->unpack_counter= 0;
+      if (filesort->using_packed_addons())
+        info->read_record_func= rr_unpack_from_buffer<true>;
+      else
+        info->read_record_func= rr_unpack_from_buffer<false>;
+    }
+    else
+    {
+      info->cache_end= (info->cache_pos+
+                        filesort->return_rows * info->ref_length);
+      info->read_record_func= rr_from_pointers;
+    }
   }
   else if (table->file->keyread_enabled())
   {
@@ -568,13 +584,17 @@ int rr_from_pointers(READ_RECORD *info)
     -1   There is no record to be read anymore.
 */
 
+template<bool Packed_addon_fields>
 static int rr_unpack_from_buffer(READ_RECORD *info)
 {
-  if (info->cache_pos == info->cache_end)
+  if (info->unpack_counter == info->sort_info->return_rows)
     return -1;                      /* End of buffer */
-  (*info->unpack)(info->addon_field, info->cache_pos,
-                  info->cache_end);
-  info->cache_pos+= info->ref_length;
+
+  uchar *record= info->sort_info->get_sorted_record(
+    static_cast<uint>(info->unpack_counter));
+  uchar *plen= record + info->sort_info->get_sort_length();
+  info->sort_info->unpack_addon_fields<Packed_addon_fields>(plen);
+  info->unpack_counter++;
   return 0;
 }
 	/* cacheing of records from a database */
@@ -708,4 +728,27 @@ static int rr_cmp(uchar *a,uchar *b)
     return (int) a[6] - (int) b[6];
   return (int) a[7] - (int) b[7];
 #endif
+}
+
+template<bool Packed_addon_fields>
+inline void SORT_INFO::unpack_addon_fields(uchar *buff)
+{
+  SORT_ADDON_FIELD *addonf= addon_fields->begin();
+  uchar *buff_end= buff + sort_buffer_size();
+  const uchar *start_of_record= buff + addonf->offset;
+
+  for ( ; addonf != addon_fields->end() ; addonf++)
+  {
+    Field *field= addonf->field;
+    if (addonf->null_bit && (addonf->null_bit & buff[addonf->null_offset]))
+    {
+      field->set_null();
+      continue;
+    }
+    field->set_notnull();
+    if (Packed_addon_fields)
+      start_of_record= field->unpack(field->ptr, start_of_record, buff_end, 0);
+    else
+      field->unpack(field->ptr, buff + addonf->offset, buff_end, 0);
+  }
 }

@@ -64,11 +64,101 @@ struct BUFFPEK_COMPARE_CONTEXT
 };
 
 
+typedef Bounds_checked_array<SORT_ADDON_FIELD> Addon_fields_array;
+
+/**
+  This class wraps information about usage of addon fields.
+  An Addon_fields object is used both during packing of data in the filesort
+  buffer, and later during unpacking in 'Filesort_info::unpack_addon_fields'.
+
+  @see documentation for the Sort_addon_field struct.
+  @see documentation for get_addon_fields()
+ */
+class Addon_fields {
+public:
+  Addon_fields(Addon_fields_array arr)
+    : m_field_descriptors(arr),
+      m_addon_buf(NULL),
+      m_addon_buf_length(0),
+      m_using_packed_addons(false)
+  {
+    DBUG_ASSERT(!arr.is_null());
+  }
+
+  SORT_ADDON_FIELD *begin() { return m_field_descriptors.begin(); }
+  SORT_ADDON_FIELD *end()   { return m_field_descriptors.end(); }
+  size_t num_field_descriptors() const { return m_field_descriptors.size(); }
+
+/*
+  /// rr_unpack_from_tempfile needs an extra buffer when unpacking.
+  uchar *allocate_addon_buf(uint sz)
+  {
+    if (m_addon_buf != NULL)
+    {
+      DBUG_ASSERT(m_addon_buf_length == sz);
+      return m_addon_buf;
+    }
+    m_addon_buf= static_cast<uchar*>(sql_alloc(sz));
+    if (m_addon_buf)
+      m_addon_buf_length= sz;
+    return m_addon_buf;
+  }
+*/
+
+  uchar *get_addon_buf()              { return m_addon_buf; }
+  uint   get_addon_buf_length() const { return m_addon_buf_length; }
+
+  void set_using_packed_addons(bool val)
+  {
+    m_using_packed_addons= val;
+  }
+
+  bool using_packed_addons() const
+  {
+    return m_using_packed_addons;
+  }
+
+  static bool can_pack_addon_fields(uint record_length)
+  {
+    return (record_length <= (0xFFFF));
+  }
+
+  /**
+    @returns Total number of bytes used for packed addon fields.
+    the size of the length field + size of null bits + sum of field sizes.
+   */
+  static uint read_addon_length(uchar *p)
+  {
+    return size_of_length_field + uint2korr(p);
+  }
+
+  /**
+    Stores the number of bytes used for packed addon fields.
+   */
+  static void store_addon_length(uchar *p, uint sz)
+  {
+    // We actually store the length of everything *after* the length field.
+    int2store(p, sz - size_of_length_field);
+  }
+
+  static const uint size_of_length_field= 2;
+
+private:
+  Addon_fields_array m_field_descriptors;
+
+  uchar    *m_addon_buf;            ///< Buffer for unpacking addon fields.
+  uint      m_addon_buf_length;     ///< Length of the buffer.
+  bool      m_using_packed_addons;  ///< Are we packing the addon fields?
+};
+
+
+
 class Sort_param {
 public:
   uint rec_length;            // Length of sorted records.
   uint sort_length;           // Length of sorted columns.
   uint ref_length;            // Length of record ref.
+  uint addon_length;          // Length of addon_fields
   uint res_length;            // Length of records in final sorted file/buffer.
   uint max_keys_per_buffer;   // Max keys / buffer.
   uint min_dupl_count;
@@ -77,7 +167,8 @@ public:
   TABLE *sort_form;           // For quicker make_sortkey.
   SORT_FIELD *local_sortorder;
   SORT_FIELD *end;
-  SORT_ADDON_FIELD *addon_field; // Descriptors for companion fields.
+  Addon_fields *addon_fields;     // Descriptors for companion fields.
+  SORT_ADDON_FIELD *addon_field;
   LEX_STRING addon_buf;          // Buffer & length of added packed fields.
 
   uchar *unique_buff;
@@ -93,6 +184,27 @@ public:
   }
   void init_for_filesort(uint sortlen, TABLE *table,
                          ha_rows maxrows, bool sort_positions);
+  /// Enables the packing of addons if possible.
+  void try_to_pack_addons(ulong max_length_for_sort_data);
+
+  /// Are we packing the "addon fields"?
+  bool using_packed_addons() const
+  {
+    DBUG_ASSERT(m_using_packed_addons ==
+                (addon_fields != NULL && addon_fields->using_packed_addons()));
+    return m_using_packed_addons;
+  }
+
+  /// Are we using "addon fields"?
+  bool using_addon_fields() const
+  {
+    return addon_fields != NULL;
+  }
+
+private:
+  uint m_packable_length;
+  bool m_using_packed_addons; ///< caches the value of using_packed_addons()
+  void *raw_mem_addon_field;
 };
 
 
