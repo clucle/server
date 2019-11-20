@@ -327,6 +327,11 @@ record */
 /** The search tuple corresponding to TRX_UNDO_INSERT_METADATA */
 extern const dtuple_t trx_undo_metadata;
 
+/** Get the table id from the undo log record
+@param[in]      undo_rec        Undo log record
+@return table id stored as a part of undo log record */
+table_id_t trx_undo_rec_get_table_id(const trx_undo_rec_t *undo_rec);
+
 #include "trx0rec.ic"
 
 #endif /* trx0rec_h */

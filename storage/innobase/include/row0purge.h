@@ -35,6 +35,7 @@ Created 3/14/1997 Heikki Tuuri
 #include "ut0vec.h"
 #include "row0mysql.h"
 #include "mysqld.h"
+#include <list>
 
 /** Determines if it is possible to remove a secondary index entry.
 Removal is possible if the secondary index entry does not refer to any
@@ -80,6 +81,12 @@ row_purge_step(
 	que_thr_t*	thr)	/*!< in: query thread */
 	MY_ATTRIBUTE((nonnull, warn_unused_result));
 
+/** Info required to purge a record */
+struct trx_purge_rec_t {
+        trx_undo_rec_t* undo_rec;       /*!< Record to purge */
+        roll_ptr_t      roll_ptr;       /*!< File pointr to UNDO record */
+};
+
 /* Purge node structure */
 
 struct purge_node_t{
@@ -87,7 +94,6 @@ struct purge_node_t{
 	/*----------------------*/
 	/* Local storage for this graph node */
 	roll_ptr_t	roll_ptr;/* roll pointer to undo log record */
-	ib_vector_t*    undo_recs;/*!< Undo recs to purge */
 
 	undo_no_t	undo_no;/*!< undo number of the record */
 
@@ -140,10 +146,12 @@ public:
 	/** metadata lock holds for this number of undo log recs */
 	int			mdl_hold_recs;
 
+	/** Undo recs to purge */
+	std::list<trx_purge_rec_t*>	undo_recs;
+
 	/** Constructor */
 	explicit purge_node_t(que_thr_t* parent) :
 		common(QUE_NODE_PURGE, parent),
-		undo_recs(NULL),
 		unavailable_table_id(0),
 		table(NULL),
 		heap(mem_heap_create(256)),
@@ -154,7 +162,9 @@ public:
 		last_table_id(0),
 		purge_thd(NULL),
 		mdl_hold_recs(0)
-	{}
+	{
+		undo_recs.clear();
+	}
 
 #ifdef UNIV_DEBUG
 	/***********************************************************//**
@@ -248,7 +258,7 @@ public:
 		DBUG_ASSERT(common.type == QUE_NODE_PURGE);
 
 		close_table();
-		undo_recs = NULL;
+		undo_recs.clear();
 		ut_d(in_progress = false);
 		purge_thd = NULL;
 		mem_heap_empty(heap);

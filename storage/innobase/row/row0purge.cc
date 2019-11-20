@@ -1160,17 +1160,15 @@ row_purge_step(
 
 	node->start();
 
-	if (!(node->undo_recs == NULL || ib_vector_is_empty(node->undo_recs))) {
-		trx_purge_rec_t*purge_rec;
-
-		purge_rec = static_cast<trx_purge_rec_t*>(
-			ib_vector_pop(node->undo_recs));
-
+	if (node->undo_recs.size()) {
+		trx_purge_rec_t*	purge_rec =
+			node->undo_recs.front();
+		node->undo_recs.pop_front();
 		node->roll_ptr = purge_rec->roll_ptr;
 
 		row_purge(node, purge_rec->undo_rec, thr);
 
-		if (ib_vector_is_empty(node->undo_recs)) {
+		if (!node->undo_recs.size()) {
 			row_purge_end(thr);
 		} else {
 			thr->run_node = node;
