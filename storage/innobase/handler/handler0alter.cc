@@ -6926,6 +6926,10 @@ op_ok:
 
 	ut_a(ctx->trx->lock.n_active_thrs == 0);
 
+	if (ctx->old_table->fts) {
+		fts_sync_during_ddl(ctx->old_table);
+	}
+
 error_handling:
 	/* After an error, remove all those index definitions from the
 	dictionary which were defined. */

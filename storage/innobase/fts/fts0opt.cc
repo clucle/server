@@ -3046,7 +3046,7 @@ void fts_sync_during_ddl(dict_table_t* table)
 
 	mutex_exit(&fts_optimize_wq->mutex);
 
-	fts_sync_table(table);
+	fts_sync_table(table, false);
 
 	mutex_enter(&fts_optimize_wq->mutex);
 	table->fts->sync_message = false;
