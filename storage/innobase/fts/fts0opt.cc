@@ -2828,17 +2828,17 @@ Optimize all FTS tables.
 @return Dummy return */
 static void fts_optimize_callback(void *)
 {
-	static ulint		current = 0;
-	static ibool		done = FALSE;
-	static ulint		n_tables = ib_vector_size(fts_slots);
-	static ulint		n_optimize = 0;
-
 	ut_ad(!srv_read_only_mode);
 
 	if (!fts_optimize_wq) {
 		/* Possibly timer initiated callback, can come after FTS_MSG_STOP.*/
 		return;
 	}
+
+	static ulint		current = 0;
+	static ibool		done = FALSE;
+	static ulint		n_tables = ib_vector_size(fts_slots);
+	static ulint		n_optimize = 0;
 
 	while (!done && srv_shutdown_state == SRV_SHUTDOWN_NONE) {
 
@@ -3031,6 +3031,7 @@ fts_optimize_shutdown()
 	os_event_destroy(fts_opt_shutdown_event);
 	ib_wqueue_free(fts_optimize_wq);
 	fts_optimize_wq = NULL;
+	fts_opt_thd = NULL;
 }
 
 /** Sync the table during commit phase
