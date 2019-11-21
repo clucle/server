@@ -68,7 +68,6 @@ struct READ_RECORD
   uchar *ref_pos;				/* pointer to form->refpos */
   uchar *rec_buf;                /* to read field values  after filesort */
   uchar	*cache,*cache_pos,*cache_end,*read_positions;
-  struct st_sort_addon_field *addon_field;     /* Pointer to the fields info */
   SORT_INFO *sort_info;
   struct st_io_cache *io_cache;
   bool print_error;

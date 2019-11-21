@@ -183,6 +183,10 @@ public:
   /// Frees the buffer.
   void free_sort_buffer();
 
+  void reset()
+  {
+    m_rawmem= NULL;
+  }
   /**
     Used to access the "right-to-left" array of record pointers as an ordinary
     "left-to-right" array, so that we can pass it directly on to std::sort().
@@ -201,6 +205,15 @@ public:
   uchar *get_sorted_record(uint ix)
   {
     return m_sort_keys[ix];
+  }
+
+  /**
+    @returns The entire buffer, as a character array.
+    This is for reusing the memory for merge buffers.
+   */
+  uchar *get_raw_buf()
+  {
+    return m_rawmem;
   }
 
   /**
@@ -225,8 +238,6 @@ public:
 
   uint get_sort_length() const { return m_sort_length; }
   void set_sort_length(uint val) { m_sort_length= val; }
-
-private:
 
 private:
   uchar  *m_next_rec_ptr;    /// The next record will be inserted here.

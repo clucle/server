@@ -38,7 +38,7 @@
 static int rr_quick(READ_RECORD *info);
 int rr_sequential(READ_RECORD *info);
 static int rr_from_tempfile(READ_RECORD *info);
-static int rr_unpack_from_tempfile(READ_RECORD *info);
+template<bool> static int rr_unpack_from_tempfile(READ_RECORD *info);
 template<bool> static int rr_unpack_from_buffer(READ_RECORD *info);
 int rr_from_pointers(READ_RECORD *info);
 static int rr_from_cache(READ_RECORD *info);
@@ -187,23 +187,20 @@ bool init_read_record(READ_RECORD *info,THD *thd, TABLE *table,
                       bool disable_rr_cache)
 {
   IO_CACHE *tempfile;
-  SORT_ADDON_FIELD *addon_field= filesort ?
-                                 (filesort->addon_fields ?
-                                 filesort->addon_fields->begin() : NULL):
-                                 NULL;
   DBUG_ENTER("init_read_record");
+
+  const bool using_addon_fields= filesort && filesort->using_addon_fields();
 
   bzero((char*) info,sizeof(*info));
   info->thd=thd;
   info->table=table;
-  info->addon_field= addon_field;
   info->sort_info= filesort;
   
   if ((table->s->tmp_table == INTERNAL_TMP_TABLE) &&
-      !addon_field)
+      !using_addon_fields)
     (void) table->file->extra(HA_EXTRA_MMAP);
   
-  if (addon_field)
+  if (using_addon_fields)
   {
     info->rec_buf=    (uchar*) filesort->addon_buf.str;
     info->ref_length= (uint)filesort->addon_buf.length;
@@ -226,9 +223,20 @@ bool init_read_record(READ_RECORD *info,THD *thd, TABLE *table,
 
   if (tempfile && !(select && select->quick))
   {
-    DBUG_PRINT("info",("using rr_from_tempfile"));
-    info->read_record_func=
-        addon_field ? rr_unpack_from_tempfile : rr_from_tempfile;
+    if (using_addon_fields)
+    {
+      DBUG_PRINT("info",("using rr_from_tempfile"));
+      if (filesort->addon_fields->using_packed_addons())
+        info->read_record_func= rr_unpack_from_tempfile<true>;
+      else
+        info->read_record_func= rr_unpack_from_tempfile<false>;
+    }
+    else
+    {
+      DBUG_PRINT("info",("using rr_from_tempfile"));
+      info->read_record_func= rr_from_tempfile;
+    }
+
     info->io_cache= tempfile;
     reinit_io_cache(info->io_cache,READ_CACHE,0L,0,0);
     info->ref_pos=table->file->ref;
@@ -242,7 +250,7 @@ bool init_read_record(READ_RECORD *info,THD *thd, TABLE *table,
       and filesort->io_cache is read sequentially
     */
     if (!disable_rr_cache &&
-        !addon_field &&
+        !using_addon_fields &&
 	thd->variables.read_rnd_buff_size &&
 	!(table->file->ha_table_flags() & HA_FAST_KEY_READ) &&
 	(table->db_stat & HA_READ_ONLY ||
@@ -274,7 +282,7 @@ bool init_read_record(READ_RECORD *info,THD *thd, TABLE *table,
       DBUG_RETURN(1);
 
     info->cache_pos= filesort->record_pointers;
-    if (filesort->using_addon_fields())
+    if (using_addon_fields)
     {
       DBUG_PRINT("info",("using rr_unpack_from_buffer"));
       DBUG_ASSERT(filesort->sorted_result_in_fsbuf);
@@ -534,12 +542,38 @@ static int rr_from_tempfile(READ_RECORD *info)
     -1   There is no record to be read anymore.
 */
 
+template<bool Packed_addon_fields>
 static int rr_unpack_from_tempfile(READ_RECORD *info)
 {
-  if (my_b_read(info->io_cache, info->rec_buf, info->ref_length))
-    return -1;
-  (*info->unpack)(info->addon_field, info->rec_buf,
-                  info->rec_buf + info->ref_length);
+  uchar *destination= info->rec_buf;
+#ifndef DBUG_OFF
+  my_off_t where= my_b_tell(info->io_cache);
+#endif
+  if (Packed_addon_fields)
+  {
+    const uint len_sz= Addon_fields::size_of_length_field;
+
+    // First read length of the record.
+    if (my_b_read(info->io_cache, destination, len_sz))
+      return -1;
+    uint res_length= Addon_fields::read_addon_length(destination);
+    DBUG_PRINT("info", ("rr_unpack from %llu to %p sz %u",
+                        static_cast<ulonglong>(where),
+                        destination, res_length));
+    DBUG_ASSERT(res_length > len_sz);
+    DBUG_ASSERT(info->sort_info->using_addon_fields());
+
+    // Then read the rest of the record.
+    if (my_b_read(info->io_cache, destination + len_sz, res_length - len_sz))
+      return -1;                                /* purecov: inspected */
+  }
+  else
+  {
+    if (my_b_read(info->io_cache, destination, info->ref_length))
+      return -1;
+  }
+
+  info->sort_info->unpack_addon_fields<Packed_addon_fields>(destination);
 
   return 0;
 }

@@ -121,7 +121,7 @@ typedef struct st_handler_check_param
 
 typedef struct st_buffpek {
   my_off_t file_pos;                    /* Where we are in the sort file */
-  uchar *base, *key;                    /* Key pointers */
+  uchar *base, *key, *end;                    /* Key pointers */
   ha_rows count;                        /* Number of rows in table */
   ha_rows mem_count;                    /* Numbers of keys in memory */
   ha_rows max_keys;                     /* Max keys in buffert */

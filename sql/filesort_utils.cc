@@ -104,7 +104,7 @@ uchar *Filesort_buffer::alloc_sort_buffer(uint num_records,
   DBUG_EXECUTE_IF("alloc_sort_buffer_fail",
                   DBUG_SET("+d,simulate_out_of_memory"););
 
-  buff_size= ((size_t)num_records) * (record_length + sizeof(uchar*));
+  buff_size= ALIGN_SIZE(num_records * (record_length + sizeof(uchar*)));
 
   /*
     The minimum memory required should be each merge buffer can hold atmost
@@ -137,7 +137,10 @@ uchar *Filesort_buffer::alloc_sort_buffer(uint num_records,
   else
   {
     if (!(m_rawmem= (uchar*) my_malloc(buff_size, MYF(MY_THREAD_SPECIFIC))))
+    {
+      m_size_in_bytes= 0;
       DBUG_RETURN(0);
+    }
 
   }
 
@@ -167,7 +170,8 @@ void Filesort_buffer::sort_buffer(const Sort_param *param, uint count)
     return;
 
   // dont reverse for PQ, it is already done
-  reverse_record_pointers();
+  if (!param->using_pq)
+    reverse_record_pointers();
 
   uchar **buffer= NULL;
   if (radixsort_is_appliccable(count, param->sort_length) &&

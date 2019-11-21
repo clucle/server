@@ -19,7 +19,6 @@
 #include "my_base.h"                            /* ha_rows */
 #include "sql_alloc.h"
 #include "filesort_utils.h"
-#include "sql_sort.h"
 
 class SQL_SELECT;
 class THD;
@@ -28,6 +27,7 @@ class Filesort_tracker;
 struct SORT_FIELD;
 typedef struct st_order ORDER;
 class JOIN;
+class Addon_fields;
 
 /**
   Sorting related info.
@@ -87,7 +87,7 @@ class SORT_INFO
 
 public:
   SORT_INFO()
-    :addon_field(0), record_pointers(0),
+    :addon_fields(NULL), record_pointers(0),
      sorted_result_in_fsbuf(FALSE)
   {
     buffpek.str= 0;
@@ -111,13 +111,13 @@ public:
     record_pointers= 0;
     buffpek.str= 0;
     addon_fields= 0;
+    sorted_result_in_fsbuf= false;
   }
 
 
   IO_CACHE  io_cache;           /* If sorted through filesort */
   LEX_STRING buffpek;           /* Buffer for buffpek structures */
   LEX_STRING addon_buf;         /* Pointer to a buffer if sorted with fields */
-  struct st_sort_addon_field *addon_field;     /* Pointer to the fields info */
   Addon_fields *addon_fields;
   uchar     *record_pointers;    /* If sorted in memory */
   /**
@@ -164,6 +164,9 @@ public:
   { return filesort_buffer.get_next_record_pointer(); }
   void adjust_next_record_pointer(uint val)
   { filesort_buffer.adjust_next_record_pointer(val); }
+
+  uchar *get_raw_buf()
+  { return filesort_buffer.get_raw_buf(); }
 
   size_t sort_buffer_size() const
   { return filesort_buffer.sort_buffer_size(); }

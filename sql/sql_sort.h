@@ -168,8 +168,8 @@ public:
   SORT_FIELD *local_sortorder;
   SORT_FIELD *end;
   Addon_fields *addon_fields;     // Descriptors for companion fields.
-  SORT_ADDON_FIELD *addon_field;
   LEX_STRING addon_buf;          // Buffer & length of added packed fields.
+  bool using_pq;
 
   uchar *unique_buff;
   bool not_killable;
@@ -201,23 +201,43 @@ public:
     return addon_fields != NULL;
   }
 
+  /**
+    Getter for record length and result length.
+    @param record_start Pointer to record.
+    @param [out] recl   Store record length here.
+    @param [out] resl   Store result length here.
+   */
+  void get_rec_and_res_len(uchar *record_start, uint *recl, uint *resl)
+  {
+    if (!using_packed_addons())
+    {
+      *recl= rec_length;
+      *resl= res_length;
+      return;
+    }
+    uchar *plen= record_start + sort_length;
+    *resl= Addon_fields::read_addon_length(plen);
+    DBUG_ASSERT(*resl <= res_length);
+    const uchar *record_end= plen + *resl;
+    *recl= static_cast<uint>(record_end - record_start);
+  }
+
 private:
   uint m_packable_length;
   bool m_using_packed_addons; ///< caches the value of using_packed_addons()
-  void *raw_mem_addon_field;
 };
 
 
-int merge_many_buff(Sort_param *param, uchar *sort_buffer,
+int merge_many_buff(Sort_param *param, uchar *sort_buffer, size_t buff_size,
 		    BUFFPEK *buffpek,
 		    uint *maxbuffer, IO_CACHE *t_file);
 ulong read_to_buffer(IO_CACHE *fromfile,BUFFPEK *buffpek,
-                     uint sort_length);
+                     Sort_param *param);
 bool merge_buffers(Sort_param *param,IO_CACHE *from_file,
-                   IO_CACHE *to_file, uchar *sort_buffer,
+                   IO_CACHE *to_file, uchar *sort_buffer, size_t buff_size,
                    BUFFPEK *lastbuff,BUFFPEK *Fb,
                    BUFFPEK *Tb,int flag);
-int merge_index(Sort_param *param, uchar *sort_buffer,
+int merge_index(Sort_param *param, uchar *sort_buffer, size_t buff_size,
 		BUFFPEK *buffpek, uint maxbuffer,
 		IO_CACHE *tempfile, IO_CACHE *outfile);
 void reuse_freed_buff(QUEUE *queue, BUFFPEK *reuse, uint key_length);

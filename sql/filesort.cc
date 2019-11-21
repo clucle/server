@@ -84,7 +84,7 @@ void Sort_param::init_for_filesort(uint sortlen, TABLE *table,
   if (using_addon_fields())
   {
     DBUG_ASSERT(addon_length < UINT_MAX32);
-    res_length= (uint)addon_length;
+    res_length= addon_length;
   }
   else
   {
@@ -196,17 +196,14 @@ SORT_INFO *filesort(THD *thd, TABLE *table, Filesort *filesort,
   if (!(sort= new SORT_INFO))
     return 0;
 
-  /*
-    TODO varun: fix this
-  if (subselect && subselect->filesort_buffer.is_allocated())
+  if (subselect && subselect->filesort_buffer.sort_buffer_size() > 0)
   {
-     Reuse cache from last call
+    // Reuse cache from last call
     sort->filesort_buffer= subselect->filesort_buffer;
     sort->buffpek= subselect->sortbuffer;
     subselect->filesort_buffer.reset();
     subselect->sortbuffer.str=0;
   }
-  */
 
   outfile= &sort->io_cache;
 
@@ -245,6 +242,7 @@ SORT_INFO *filesort(THD *thd, TABLE *table, Filesort *filesort,
     thd->query_plan_flags|= QPLAN_FILESORT_PRIORITY_QUEUE;
     status_var_increment(thd->status_var.filesort_pq_sorts_);
     tracker->incr_pq_used();
+    param.using_pq= true;
     const size_t compare_length= param.sort_length;
     /*
       For PQ queries (with limit) we know exactly how many pointers/records
@@ -273,6 +271,7 @@ SORT_INFO *filesort(THD *thd, TABLE *table, Filesort *filesort,
     DBUG_PRINT("info", ("filesort PQ is not applicable"));
 
     param.try_to_pack_addons(thd->variables.max_length_for_sort_data);
+    param.using_pq= false;
 
     size_t min_sort_memory= MY_MAX(MIN_SORT_MEMORY,
                                    param.sort_length*MERGEBUFF2);
@@ -355,20 +354,20 @@ SORT_INFO *filesort(THD *thd, TABLE *table, Filesort *filesort,
                                 (param.rec_length + sizeof(char*))) /
                                param.rec_length - 1);
     maxbuffer--;				// Offset from 0
-    if (merge_many_buff(&param,
-                        (uchar*) sort->get_sort_keys(),
+    if (merge_many_buff(&param, sort->get_raw_buf(), sort->sort_buffer_size(),
                         buffpek,&maxbuffer,
-			&tempfile))
+	                      &tempfile))
       goto err;
     if (flush_io_cache(&tempfile) ||
 	reinit_io_cache(&tempfile,READ_CACHE,0L,0,0))
       goto err;
     if (merge_index(&param,
-                    (uchar*) sort->get_sort_keys(),
+                    sort->get_raw_buf(),
+                    sort->sort_buffer_size(),
                     buffpek,
                     maxbuffer,
                     &tempfile,
-		    outfile))
+                    outfile))
       goto err;
   }
 
@@ -392,7 +391,6 @@ SORT_INFO *filesort(THD *thd, TABLE *table, Filesort *filesort,
     /* Remember sort buffers for next subquery call */
     subselect->filesort_buffer= sort->filesort_buffer;
     subselect->sortbuffer=      sort->buffpek;
-    /* TODO varun: please fix
     sort->filesort_buffer.reset();              // Don't free this*/
   }
   sort->buffpek.str= 0;
@@ -955,36 +953,48 @@ write_keys(Sort_param *param,  SORT_INFO *fs_info, uint count,
            IO_CACHE *buffpek_pointers, IO_CACHE *tempfile)
 {
   size_t rec_length;
-  uchar **end;
   BUFFPEK buffpek;
   DBUG_ENTER("write_keys");
 
   rec_length= param->rec_length;
 
   fs_info->sort_buffer(param, count);
-  uchar **sort_keys= fs_info->get_sort_keys();
 
   if (!my_b_inited(tempfile) &&
       open_cached_file(tempfile, mysql_tmpdir, TEMP_PREFIX, DISK_BUFFER_SIZE,
                        MYF(MY_WME)))
-    goto err;                                   /* purecov: inspected */
+    DBUG_RETURN(1);                                /* purecov: inspected */
   /* check we won't have more buffpeks than we can possibly keep in memory */
   if (my_b_tell(buffpek_pointers) + sizeof(BUFFPEK) > (ulonglong)UINT_MAX)
-    goto err;
+    DBUG_RETURN(1);
+
   bzero(&buffpek, sizeof(buffpek));
   buffpek.file_pos= my_b_tell(tempfile);
   if ((ha_rows) count > param->max_rows)
     count=(uint) param->max_rows;               /* purecov: inspected */
   buffpek.count=(ha_rows) count;
-  for (end=sort_keys+count ; sort_keys != end ; sort_keys++)
-    if (my_b_write(tempfile, (uchar*) *sort_keys, (uint) rec_length))
-      goto err;
+
+  const bool packed_addon_fields= param->using_packed_addons();
+  for (uint ix= 0; ix < count; ++ix)
+  {
+    uchar *record= fs_info->get_sorted_record(ix);
+    if (packed_addon_fields)
+    {
+      rec_length= param->sort_length +
+        Addon_fields::read_addon_length(record + param->sort_length);
+    }
+    else
+      rec_length= param->rec_length;
+
+    if (my_b_write(tempfile, record, rec_length))
+      DBUG_RETURN(1);                           /* purecov: inspected */
+  }
+
   if (my_b_write(buffpek_pointers, (uchar*) &buffpek, sizeof(buffpek)))
-    goto err;
+    DBUG_RETURN(1);
+
   DBUG_RETURN(0);
 
-err:
-  DBUG_RETURN(1);
 } /* write_keys */
 
 
@@ -1283,7 +1293,7 @@ static uint make_sortkey(Sort_param *param, uchar *to, uchar *ref_pos)
     to+= addonf->offset;
     for ( ; addonf != param->addon_fields->end() ; addonf++)
     {
-      field= addonf->field;
+      Field *field= addonf->field;
       if (addonf->null_bit && field->is_null())
       {
         nulls[addonf->null_offset]|= addonf->null_bit;
@@ -1473,7 +1483,7 @@ static bool check_if_pq_applicable(Sort_param *param,
   }
 
   // Try to strip off addon fields.
-  if (param->addon_field)
+  if (param->addon_fields)
   {
     const size_t row_length=
       param->sort_length + param->ref_length + sizeof(char*);
@@ -1508,12 +1518,12 @@ static bool check_if_pq_applicable(Sort_param *param,
       filesort_info->alloc_sort_buffer(param->max_keys_per_buffer,
                                        param->sort_length + param->ref_length);
 
-      if (filesort_info->sort_buffer_size())
+      if (filesort_info->sort_buffer_size() > 0)
       {
         /* Make attached data to be references instead of fields. */
-        my_free(filesort_info->addon_field);
-        filesort_info->addon_field= NULL;
-        param->addon_field= NULL;
+        my_free(filesort_info->addon_fields);
+        filesort_info->addon_fields= NULL;
+        param->addon_fields= NULL;
 
         param->res_length= param->ref_length;
         param->sort_length+= param->ref_length;
@@ -1529,7 +1539,7 @@ static bool check_if_pq_applicable(Sort_param *param,
 
 /** Merge buffers to make < MERGEBUFF2 buffers. */
 
-int merge_many_buff(Sort_param *param, uchar *sort_buffer,
+int merge_many_buff(Sort_param *param, uchar *sort_buffer, size_t buff_size,
                     BUFFPEK *buffpek, uint *maxbuffer, IO_CACHE *t_file)
 {
   uint i;
@@ -1554,11 +1564,11 @@ int merge_many_buff(Sort_param *param, uchar *sort_buffer,
     lastbuff=buffpek;
     for (i=0 ; i <= *maxbuffer-MERGEBUFF*3/2 ; i+=MERGEBUFF)
     {
-      if (merge_buffers(param,from_file,to_file,sort_buffer,lastbuff++,
+      if (merge_buffers(param,from_file,to_file,sort_buffer, buff_size, lastbuff++,
 			buffpek+i,buffpek+i+MERGEBUFF-1,0))
       goto cleanup;
     }
-    if (merge_buffers(param,from_file,to_file,sort_buffer,lastbuff++,
+    if (merge_buffers(param,from_file,to_file,sort_buffer, buff_size, lastbuff++,
 		      buffpek+i,buffpek+ *maxbuffer,0))
       break;					/* purecov: inspected */
     if (flush_io_cache(to_file))
@@ -1584,24 +1594,68 @@ cleanup:
            (ulong)-1 if something goes wrong
 */
 
-ulong read_to_buffer(IO_CACHE *fromfile, BUFFPEK *buffpek,
-                     uint rec_length)
+ulong read_to_buffer(IO_CACHE *fromfile,BUFFPEK *buffpek,
+                     Sort_param *param)
 {
-  ulong count;
-  ulong length= 0;
+  ha_rows count;
+  uint rec_length= param->rec_length;
 
-  if ((count= (ulong) MY_MIN((ha_rows) buffpek->max_keys,buffpek->count)))
+  if ((count= MY_MIN((ha_rows) buffpek->max_keys,buffpek->count)))
   {
-    length= rec_length*count;
-    if (unlikely(my_b_pread(fromfile, (uchar*) buffpek->base, length,
+    size_t bytes_to_read;
+    if (param->using_packed_addons())
+    {
+      count= buffpek->count;
+      bytes_to_read= MY_MIN(static_cast<size_t>(buffpek->end - buffpek->base),
+                            static_cast<size_t>(fromfile->end_of_file -
+                                                 buffpek->file_pos));
+    }
+    else
+      bytes_to_read= rec_length * static_cast<size_t>(count);
+
+    if (unlikely(my_b_pread(fromfile, (uchar*) buffpek->base, bytes_to_read,
                             buffpek->file_pos)))
       return ((ulong) -1);
+
+    size_t num_bytes_read;
+    if (param->using_packed_addons())
+    {
+      /*
+        The last record read is most likely not complete here.
+        We need to loop through all the records, reading the length fields,
+        and then "chop off" the final incomplete record.
+       */
+      uchar *record= buffpek->base;
+      uint ix= 0;
+      for (; ix < count; ++ix)
+      {
+        if (record + param->sort_length + Addon_fields::size_of_length_field >
+            buffpek->end)
+          break;                                // Incomplete record.
+        uchar *plen= record + param->sort_length;
+        uint res_length= Addon_fields::read_addon_length(plen);
+        if (plen + res_length > buffpek->end)
+          break;                                // Incomplete record.
+        DBUG_ASSERT(res_length > 0);
+        record+= param->sort_length;
+        record+= res_length;
+      }
+      DBUG_ASSERT(ix > 0);
+      count= ix;
+      num_bytes_read= record - buffpek->base;
+      DBUG_PRINT("info", ("read %llu bytes of complete records",
+                          static_cast<ulonglong>(bytes_to_read)));
+    }
+    else
+      num_bytes_read= bytes_to_read;
+
     buffpek->key=buffpek->base;
-    buffpek->file_pos+= length;			/* New filepos */
+    buffpek->file_pos+= num_bytes_read;			/* New filepos */
     buffpek->count-=	count;
     buffpek->mem_count= count;
+    return (ulong) num_bytes_read;
   }
-  return (length);
+  return 0;
 } /* read_to_buffer */
 
 
@@ -1618,18 +1672,18 @@ ulong read_to_buffer(IO_CACHE *fromfile, BUFFPEK *buffpek,
 
 void reuse_freed_buff(QUEUE *queue, BUFFPEK *reuse, uint key_length)
 {
-  uchar *reuse_end= reuse->base + reuse->max_keys * key_length;
   for (uint i= queue_first_element(queue);
        i <= queue_last_element(queue);
        i++)
   {
     BUFFPEK *bp= (BUFFPEK *) queue_element(queue, i);
-    if (bp->base + bp->max_keys * key_length == reuse->base)
+    if (bp->end == reuse->base)
     {
+      bp->end = reuse->end;
       bp->max_keys+= reuse->max_keys;
       return;
     }
-    else if (bp->base == reuse_end)
+    else if (bp->base == reuse->end)
     {
       bp->base= reuse->base;
       bp->max_keys+= reuse->max_keys;
@@ -1659,7 +1713,7 @@ void reuse_freed_buff(QUEUE *queue, BUFFPEK *reuse, uint key_length)
 */
 
 bool merge_buffers(Sort_param *param, IO_CACHE *from_file,
-                   IO_CACHE *to_file, uchar *sort_buffer,
+                   IO_CACHE *to_file, uchar *sort_buffer, size_t buff_size,
                    BUFFPEK *lastbuff, BUFFPEK *Fb, BUFFPEK *Tb,
                    int flag)
 {
@@ -1717,12 +1771,13 @@ bool merge_buffers(Sort_param *param, IO_CACHE *from_file,
   for (buffpek= Fb ; buffpek <= Tb ; buffpek++)
   {
     buffpek->base= strpos;
+    buffpek->end=  buffpek->base + buff_size / ((uint) (Tb-Fb) +1);
     buffpek->max_keys= maxcount;
-    bytes_read= read_to_buffer(from_file, buffpek, rec_length);
+    bytes_read= read_to_buffer(from_file, buffpek, param);
     if (unlikely(bytes_read == (ulong) -1))
       goto err;					/* purecov: inspected */
-
     strpos+= bytes_read;
+    buffpek->end= strpos;
     buffpek->max_keys= buffpek->mem_count;	// If less data in buffers than expected
     queue_insert(&queue, (uchar*) buffpek);
   }
@@ -1743,7 +1798,7 @@ bool merge_buffers(Sort_param *param, IO_CACHE *from_file,
     if (! --buffpek->mem_count)
     {
       if (unlikely(!(bytes_read= read_to_buffer(from_file, buffpek,
-                                                rec_length))))
+                                                param))))
       {
         (void) queue_remove_top(&queue);
         reuse_freed_buff(&queue, buffpek, rec_length);
@@ -1785,6 +1840,10 @@ bool merge_buffers(Sort_param *param, IO_CACHE *from_file,
         }
 	src= unique_buff;
       }
+      {
+        param->get_rec_and_res_len(buffpek->key,
+                                   &rec_length, &res_length);
+        const uint bytes_to_write= (flag == 0) ? rec_length : res_length;
         
       /* 
         Do not write into the output file if this is the final merge called
@@ -1796,7 +1855,7 @@ bool merge_buffers(Sort_param *param, IO_CACHE *from_file,
       */          
       if (!check_dupl_count || dupl_count >= min_dupl_count)
       {
-        if (my_b_write(to_file, src+wr_offset, wr_len))
+        if (my_b_write(to_file, src+wr_offset, bytes_to_write))
           goto err;                           /* purecov: inspected */
       }
       if (cmp)
@@ -1811,13 +1870,13 @@ bool merge_buffers(Sort_param *param, IO_CACHE *from_file,
         /* Nothing more to do */
         goto end;                               /* purecov: inspected */
       }
-
+      }
     skip_duplicate:
       buffpek->key+= rec_length;
       if (! --buffpek->mem_count)
       {
         if (unlikely(!(bytes_read= read_to_buffer(from_file, buffpek,
-                                                  rec_length))))
+                                                  param))))
         {
           (void) queue_remove_top(&queue);
           reuse_freed_buff(&queue, buffpek, rec_length);
@@ -1831,6 +1890,7 @@ bool merge_buffers(Sort_param *param, IO_CACHE *from_file,
   }
   buffpek= (BUFFPEK*) queue_top(&queue);
   buffpek->base= (uchar*) sort_buffer;
+  buffpek->end = buffpek->base + buff_size;
   buffpek->max_keys= param->max_keys_per_buffer;
 
   /*
@@ -1873,34 +1933,26 @@ bool merge_buffers(Sort_param *param, IO_CACHE *from_file,
       buffpek->count= 0;                        /* Don't read more */
     }
     max_rows-= buffpek->mem_count;
-    if (flag == 0)
+    for (uint ix= 0; ix <  buffpek->mem_count; ++ix)
     {
-      if (my_b_write(to_file, (uchar*) buffpek->key,
-                     (size_t)(rec_length*buffpek->mem_count)))
-        goto err;                             /* purecov: inspected */
-    }
-    else
-    {
-      uchar *end;
-      src= buffpek->key+offset;
-      for (end= src+buffpek->mem_count*rec_length ;
-           src != end ;
-           src+= rec_length)
+      param->get_rec_and_res_len(buffpek->key,
+                                 &rec_length, &res_length);
+      const uint bytes_to_write= (flag == 0) ? rec_length : res_length;
+      if (check_dupl_count)
       {
-        if (check_dupl_count)
-        {
-          memcpy((uchar *) &dupl_count, src+dupl_count_ofs, sizeof(dupl_count)); 
-          if (dupl_count < min_dupl_count)
-	    continue;
-        }
-        if (my_b_write(to_file, src, wr_len))
-          goto err;
+        memcpy((uchar *) &dupl_count,
+               buffpek->key + offset + dupl_count_ofs, sizeof(dupl_count));
+        if (dupl_count < min_dupl_count)
+          continue;
       }
+      if (my_b_write(to_file, buffpek->key + wr_offset, bytes_to_write))
+        goto err;
+      buffpek->key+= rec_length;
     }
   }
   while (likely(!(error=
                   (bytes_read= read_to_buffer(from_file, buffpek,
-                                              rec_length)) == (ulong) -1)) &&
+                                              param)) == (ulong) -1)) &&
          bytes_read != 0);
 
 end:
@@ -1919,12 +1971,12 @@ err:
 
 	/* Do a merge to output-file (save only positions) */
 
-int merge_index(Sort_param *param, uchar *sort_buffer,
+int merge_index(Sort_param *param, uchar *sort_buffer, size_t buff_size,
 		BUFFPEK *buffpek, uint maxbuffer,
 		IO_CACHE *tempfile, IO_CACHE *outfile)
 {
   DBUG_ENTER("merge_index");
-  if (merge_buffers(param,tempfile,outfile,sort_buffer,buffpek,buffpek,
+  if (merge_buffers(param,tempfile,outfile,sort_buffer, buff_size, buffpek,buffpek,
 		    buffpek+maxbuffer,1))
     DBUG_RETURN(1);				/* purecov: inspected */
   DBUG_RETURN(0);
@@ -2163,6 +2215,7 @@ get_addon_fields(TABLE *table, uint sortlength, LEX_STRING *addon_buf,
                          &raw_mem, sizeof(Addon_fields),
                          &raw_mem_addon_field,
                          sizeof(SORT_ADDON_FIELD) * fields,
+                         &addon_buf->str, length,
                          NullS)))
     DBUG_RETURN(0);
 
@@ -2170,6 +2223,7 @@ get_addon_fields(TABLE *table, uint sortlength, LEX_STRING *addon_buf,
       addon_array(static_cast<SORT_ADDON_FIELD*>(raw_mem_addon_field), fields);
   Addon_fields *addon_fields= new (raw_mem) Addon_fields(addon_array);
 
+  addon_buf->length= length;
   (*addon_length)= length;
   (*m_packable_length)= packable_length;
 

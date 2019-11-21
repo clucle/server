@@ -514,6 +514,12 @@ static bool merge_walk(uchar *merge_buffer, size_t merge_buffer_size,
   int res= 1;
   uint cnt_ofs= key_length - (with_counters ? sizeof(element_count) : 0);
   element_count cnt;
+
+  // read_to_buffer() needs only rec_length.
+  Sort_param sort_param;
+  sort_param.rec_length= key_length;
+  DBUG_ASSERT(!sort_param.using_addon_fields());
+
   /*
     Invariant: queue must contain top element from each tree, until a tree
     is not completely walked through.
@@ -523,8 +529,9 @@ static bool merge_walk(uchar *merge_buffer, size_t merge_buffer_size,
   for (top= begin; top != end; ++top)
   {
     top->base= merge_buffer + (top - begin) * piece_size;
+    top->end= top->base + piece_size;
     top->max_keys= max_key_count_per_piece;
-    bytes_read= read_to_buffer(file, top, key_length);
+    bytes_read= read_to_buffer(file, top, &sort_param);
     if (unlikely(bytes_read == (ulong) -1))
       goto end;
     DBUG_ASSERT(bytes_read);
@@ -553,7 +560,7 @@ static bool merge_walk(uchar *merge_buffer, size_t merge_buffer_size,
       /* save old_key not to overwrite it in read_to_buffer */
       memcpy(save_key_buff, old_key, key_length);
       old_key= save_key_buff;
-      bytes_read= read_to_buffer(file, top, key_length);
+      bytes_read= read_to_buffer(file, top, &sort_param);
       if (unlikely(bytes_read == (ulong) -1))
         goto end;
       else if (bytes_read)      /* top->key, top->mem_count are reset */
@@ -601,7 +608,7 @@ static bool merge_walk(uchar *merge_buffer, size_t merge_buffer_size,
       top->key+= key_length;
     }
     while (--top->mem_count);
-    bytes_read= read_to_buffer(file, top, key_length);
+    bytes_read= read_to_buffer(file, top, &sort_param);
     if (unlikely(bytes_read == (ulong) -1))
       goto end;
   }
@@ -657,7 +664,8 @@ bool Unique::walk(TABLE *table, tree_walk_action action, void *walk_action_arg)
   if (!(merge_buffer = (uchar *)my_malloc(buff_sz, MYF(MY_WME))))
     return 1;
   if (buff_sz < full_size * (file_ptrs.elements + 1UL))
-    res= merge(table, merge_buffer, buff_sz >= full_size * MERGEBUFF2) ;
+    res= merge(table, merge_buffer, buff_sz,
+               buff_sz >= full_size * MERGEBUFF2) ;
 
   if (!res)
   {
@@ -690,7 +698,7 @@ bool Unique::walk(TABLE *table, tree_walk_action action, void *walk_action_arg)
     <> 0 error
  */
 
-bool Unique::merge(TABLE *table, uchar *buff, bool without_last_merge)
+bool Unique::merge(TABLE *table, uchar *buff, size_t buff_size, bool without_last_merge)
 {
   IO_CACHE *outfile= &sort.io_cache;
   BUFFPEK *file_ptr= (BUFFPEK*) file_ptrs.buffer;
@@ -724,7 +732,7 @@ bool Unique::merge(TABLE *table, uchar *buff, bool without_last_merge)
   sort_param.cmp_context.key_compare_arg= tree.custom_arg;
 
   /* Merge the buffers to one file, removing duplicates */
-  if (merge_many_buff(&sort_param,buff,file_ptr,&maxbuffer,&file))
+  if (merge_many_buff(&sort_param,buff, buff_size, file_ptr,&maxbuffer,&file))
     goto err;
   if (flush_io_cache(&file) ||
       reinit_io_cache(&file,READ_CACHE,0L,0,0))
@@ -736,7 +744,7 @@ bool Unique::merge(TABLE *table, uchar *buff, bool without_last_merge)
     file_ptrs.elements= maxbuffer+1;
     return 0;
   }
-  if (merge_index(&sort_param, buff, file_ptr, maxbuffer, &file, outfile))
+  if (merge_index(&sort_param, buff, buff_size, file_ptr, maxbuffer, &file, outfile))
     goto err;
   error= 0;
 err:
@@ -791,7 +799,7 @@ bool Unique::get(TABLE *table)
                                         MYF(MY_THREAD_SPECIFIC|MY_WME))))
     DBUG_RETURN(1);
 
-  if (merge(table, sort_buffer, FALSE))
+  if (merge(table, sort_buffer, buff_sz,  FALSE))
     goto err;
   rc= 0;  
 
