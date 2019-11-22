@@ -887,7 +887,7 @@ row_purge_parse_undo_rec(
 	roll_ptr_t	roll_ptr;
 	ulint		info_bits;
 	ulint		type;
-	bool		is_temp_name;
+	bool		is_temp_name = false;
 
 	ut_ad(node != NULL);
 	ut_ad(thr != NULL);
