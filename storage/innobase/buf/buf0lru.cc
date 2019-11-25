@@ -1835,8 +1835,11 @@ buf_LRU_block_free_non_file_page(
 	memset(block->frame, '\0', srv_page_size);
 #else
 	/* Wipe page_no and space_id */
-	memset(block->frame + FIL_PAGE_OFFSET, 0xfe, 4);
-	memset(block->frame + FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID, 0xfe, 4);
+	compile_time_assert(FIL_PAGE_OFFSET % 4 == 0);
+	memset_aligned<4>(block->frame + FIL_PAGE_OFFSET, 0xfe, 4);
+	compile_time_assert(FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID % 4 == 2);
+	memset_aligned<2>(block->frame + FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID,
+			  0xfe, 4);
 #endif /* UNIV_DEBUG */
 	data = block->page.zip.data;
 
@@ -2047,10 +2050,13 @@ buf_LRU_block_remove_hashed(
 		return(false);
 
 	case BUF_BLOCK_FILE_PAGE:
-		memset(((buf_block_t*) bpage)->frame
-		       + FIL_PAGE_OFFSET, 0xff, 4);
-		memset(((buf_block_t*) bpage)->frame
-		       + FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID, 0xff, 4);
+		compile_time_assert(FIL_NULL == 0xffffffff);
+		compile_time_assert(FIL_PAGE_OFFSET % 4 == 0);
+		memset_aligned<4>(reinterpret_cast<buf_block_t*>(bpage)->frame
+				  + FIL_PAGE_OFFSET, 0xff, 4);
+		compile_time_assert(FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID % 4 == 2);
+		memset_aligned<2>(reinterpret_cast<buf_block_t*>(bpage)->frame
+				  + FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID, 0xff, 4);
 		UNIV_MEM_INVALID(((buf_block_t*) bpage)->frame,
 				 srv_page_size);
 		buf_page_set_state(bpage, BUF_BLOCK_REMOVE_HASH);

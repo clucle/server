@@ -1,5 +1,6 @@
 /*
    Copyright (c) 2000, 2012, Oracle and/or its affiliates.
+   Copyright (c) 2019, MariaDB Corporation.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -193,6 +194,24 @@ extern ulonglong strtoull(const char *str, char **ptr, int base);
 #define longlong2str(A,B,C) ll2str((A),(B),(C),1)
 
 #if defined(__cplusplus)
+}
+
+template <size_t Alignment>
+inline void *memcpy_aligned(void *dest, const void *src, size_t n)
+{
+  return memcpy(__builtin_assume_aligned(dest, Alignment),
+                __builtin_assume_aligned(src, Alignment), n);
+}
+template <size_t Alignment>
+inline int memcmp_aligned(const void *s1, const void *s2, size_t n)
+{
+  return memcmp(__builtin_assume_aligned(s1, Alignment),
+                __builtin_assume_aligned(s2, Alignment), n);
+}
+template <size_t Alignment>
+inline void *memset_aligned(void *s, int c, size_t n)
+{
+  return memset(__builtin_assume_aligned(s, Alignment), c, n);
 }
 #endif
 
