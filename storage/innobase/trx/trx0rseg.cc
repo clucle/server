@@ -709,53 +709,37 @@ trx_temp_rseg_create()
 	}
 }
 
-/********************************************************************
-Get the number of unique rollback tablespaces in use except space id 0.
+/** Get the number of unique rollback tablespaces in use except space id 0.
 The last space id will be the sentinel value ULINT_UNDEFINED. The array
 will be sorted on space id. Note: space_ids should have have space for
 TRX_SYS_N_RSEGS + 1 elements.
 @return number of unique rollback tablespaces in use. */
-ulint
-trx_rseg_get_n_undo_tablespaces(
-/*============================*/
-	ulint*		space_ids)	/*!< out: array of space ids of
-					UNDO tablespaces */
+ulint trx_rseg_get_n_undo_tablespaces()
 {
-	mtr_t mtr;
-	mtr.start();
+  mtr_t mtr;
+  mtr.start();
+  buf_block_t* sys_header = trx_sysf_get(&mtr, false);
 
-	buf_block_t* sys_header = trx_sysf_get(&mtr, false);
-	if (!sys_header) {
-		mtr.commit();
-		return 0;
-	}
+  if (!sys_header)
+  {
+    mtr.commit();
+    return 0;
+  }
 
-	ulint* end = space_ids;
+  std::set<ulint> space_ids;
+  for (ulint rseg_id = 0; rseg_id < TRX_SYS_N_RSEGS; rseg_id++)
+  {
+     uint32_t page_no = trx_sysf_rseg_get_page_no(sys_header, rseg_id);
 
-	for (ulint rseg_id = 0; rseg_id < TRX_SYS_N_RSEGS; rseg_id++) {
-		uint32_t page_no = trx_sysf_rseg_get_page_no(sys_header,
-							     rseg_id);
+     if (page_no == FIL_NULL)
+       continue;
 
-		if (page_no == FIL_NULL) {
-			continue;
-		}
+     if (ulint space = trx_sysf_rseg_get_space(sys_header, rseg_id))
+       space_ids.insert(space);
+  }
 
-		if (ulint space = trx_sysf_rseg_get_space(sys_header,
-							  rseg_id)) {
-			if (std::find(space_ids, end, space) == end) {
-				*end++ = space;
-			}
-		}
-	}
-
-	mtr.commit();
-
-	ut_a(end - space_ids <= TRX_SYS_N_RSEGS);
-	*end = ULINT_UNDEFINED;
-
-	std::sort(space_ids, end);
-
-	return ulint(end - space_ids);
+  mtr.commit();
+  return space_ids.size();
 }
 
 /** Update the offset information about the end of the binlog entry
