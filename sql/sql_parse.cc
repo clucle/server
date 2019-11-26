@@ -5636,6 +5636,11 @@ mysql_execute_command(THD *thd)
     my_ok(thd);
     break;
   }
+  case SQLCOM_COMMIT_PREVIOUS:
+  {
+
+    break;
+  }
   case SQLCOM_ROLLBACK:
   {
     DBUG_ASSERT(thd->lock == NULL ||
@@ -5671,6 +5676,11 @@ mysql_execute_command(THD *thd)
       thd->set_killed(KILL_CONNECTION);
     my_ok(thd);
    break;
+  }
+  case SQLCOM_ROLLBACK_PREVIOUS:
+  {
+
+    break;
   }
   case SQLCOM_RELEASE_SAVEPOINT:
     if (trans_release_savepoint(thd, lex->ident))
