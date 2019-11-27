@@ -718,7 +718,7 @@ ulint trx_rseg_get_n_undo_tablespaces()
 {
   mtr_t mtr;
   mtr.start();
-  buf_block_t* sys_header = trx_sysf_get(&mtr, false);
+  buf_block_t* sys_header= trx_sysf_get(&mtr, false);
 
   if (!sys_header)
   {
@@ -727,14 +727,14 @@ ulint trx_rseg_get_n_undo_tablespaces()
   }
 
   std::set<ulint> space_ids;
-  for (ulint rseg_id = 0; rseg_id < TRX_SYS_N_RSEGS; rseg_id++)
+  for (ulint rseg_id= 0; rseg_id < TRX_SYS_N_RSEGS; rseg_id++)
   {
-     uint32_t page_no = trx_sysf_rseg_get_page_no(sys_header, rseg_id);
+     uint32_t page_no= trx_sysf_rseg_get_page_no(sys_header, rseg_id);
 
      if (page_no == FIL_NULL)
        continue;
 
-     if (ulint space = trx_sysf_rseg_get_space(sys_header, rseg_id))
+     if (ulint space= trx_sysf_rseg_get_space(sys_header, rseg_id))
        space_ids.insert(space);
   }
 
